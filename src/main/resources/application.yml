@@ -1,0 +1,63 @@
+spring:
+  application:
+    name: url-shortener
+
+  datasource:
+    url: jdbc:h2:mem:urlshortenerdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
+  shutdown: graceful   # drain in-flight requests before stopping (SIGTERM from Docker/k8s)
+
+app:
+  base-url: http://localhost:8080
+  default-ttl-days: 30
+  short-code:
+    length: 6
+    max-retries: 5
+  rate-limit:
+    capacity: 20
+    refill-tokens: 20
+    refill-seconds: 60
+  cleanup:
+    cron: "0 0 3 * * *"   # run at 03:00 every night; override per environment
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.urlshortener: DEBUG
+    org.flywaydb: INFO

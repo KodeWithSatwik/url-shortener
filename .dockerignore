@@ -1,0 +1,32 @@
+# Maven build output — never send to Docker; stage 1 builds fresh inside the image
+target/
+reports/
+
+# IDE and OS artifacts
+.idea/
+*.iml
+.DS_Store
+*.class
+
+# Maven wrapper cache (not needed inside the build image)
+.mvn/repository/
+
+# Local test/coverage reports — generated inside the container if needed
+reports/
+
+# Git metadata
+.git/
+.gitignore
+
+# Documentation source — not needed in the runtime image
+docs/
+scripts/
+
+# Secrets — never bake credentials into an image
+.env
+
+# Docker files themselves (no recursive COPY needed)
+Dockerfile
+docker-compose.yml
+.dockerignore
+.env.example

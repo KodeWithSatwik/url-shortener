@@ -1,0 +1,331 @@
+openapi: 3.0.3
+info:
+  title: URL Shortener Service API
+  description: |
+    Production-quality URL shortener REST API with custom aliases, TTL expiry,
+    asynchronous click analytics, and per-IP rate limiting (20 req/min).
+
+    Built with Java 17 + Spring Boot 3.2 + Spring Data JPA + Flyway + Bucket4j.
+
+    Interactive Swagger UI available at `/swagger-ui.html` when the service is running.
+  version: 1.0.0
+  contact:
+    name: URL Shortener Service
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (H2 in-memory)
+  - url: https://short.domain.com
+    description: Production (PostgreSQL — configure via application-prod.yml)
+
+tags:
+  - name: URL Shortener
+    description: Create, redirect, and delete shortened URLs
+  - name: Analytics
+    description: Click analytics for shortened URLs
+
+paths:
+
+  /api/v1/urls:
+    post:
+      tags:
+        - URL Shortener
+      summary: Shorten a URL
+      description: |
+        Creates a short code for the given original URL. If the same original URL
+        was already shortened and is still active, returns the existing record (HTTP 200).
+        
+        Optional fields: `customAlias` (3–50 alphanumeric chars/hyphens) and `expiresAt`.
+        If `expiresAt` is omitted the service applies a 30-day default TTL.
+      operationId: shorten
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShortenUrlRequest'
+            examples:
+              basic:
+                summary: Minimal request
+                value:
+                  originalUrl: "https://example.com/very/long/path?query=param"
+              withAlias:
+                summary: Custom alias and expiry
+                value:
+                  originalUrl: "https://example.com/promo"
+                  customAlias: "my-promo"
+                  expiresAt: "2026-12-31T23:59:59"
+      responses:
+        '201':
+          description: URL shortened successfully (new record created)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortenUrlResponse'
+              example:
+                shortCode: "aB3x"
+                shortUrl: "http://localhost:8080/aB3x"
+                originalUrl: "https://example.com/very/long/path?query=param"
+                createdAt: "2026-10-09T16:00:00"
+                expiresAt: "2026-11-08T16:00:00"
+        '200':
+          description: Duplicate URL — returns existing active short link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortenUrlResponse'
+        '400':
+          description: |
+            Invalid request. Possible causes:
+            - `originalUrl` is blank or exceeds 2048 characters
+            - URL does not start with `http://` or `https://`
+            - `customAlias` contains invalid characters or wrong length
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Custom alias is already taken by another URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2026-10-09T16:00:00"
+                status: 409
+                error: "Conflict"
+                message: "Custom alias 'my-promo' is already taken"
+                path: "/api/v1/urls"
+        '429':
+          description: Rate limit exceeded (20 requests/minute per IP)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /{shortCode}:
+    get:
+      tags:
+        - URL Shortener
+      summary: Redirect to original URL
+      description: |
+        Resolves the short code and redirects the client to the original URL via HTTP 302.
+        
+        A click event (timestamp, referrer, client IP) is recorded **asynchronously** —
+        it does not block the redirect response.
+        
+        Returns `410 Gone` if the URL has passed its `expiresAt` timestamp.
+      operationId: redirect
+      parameters:
+        - name: shortCode
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "aB3x"
+      responses:
+        '302':
+          description: Redirect to original URL
+          headers:
+            Location:
+              description: The original long URL
+              schema:
+                type: string
+                format: uri
+        '404':
+          description: Short code not found or has been deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: URL has expired (past its `expiresAt` timestamp)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (20 requests/minute per IP)
+
+  /api/v1/urls/{shortCode}:
+    delete:
+      tags:
+        - URL Shortener
+      summary: Delete a shortened URL
+      description: |
+        Permanently deletes the short URL and all associated click events
+        (cascade delete enforced by the `fk_click_short_code` foreign key constraint).
+      operationId: deleteUrl
+      parameters:
+        - name: shortCode
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "aB3x"
+      responses:
+        '204':
+          description: URL deleted successfully (no response body)
+        '404':
+          description: Short code not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (20 requests/minute per IP)
+
+  /api/v1/urls/{shortCode}/analytics:
+    get:
+      tags:
+        - Analytics
+      summary: Get click analytics for a short URL
+      description: |
+        Returns total click count, the 10 most recent individual click events,
+        and the top referrers aggregated by count.
+      operationId: getAnalytics
+      parameters:
+        - name: shortCode
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "aB3x"
+      responses:
+        '200':
+          description: Analytics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsResponse'
+              example:
+                shortCode: "aB3x"
+                totalClicks: 128
+                recentClicks:
+                  - clickedAt: "2026-10-09T16:20:15"
+                    referrer: "https://news.ycombinator.com"
+                  - clickedAt: "2026-10-09T16:18:03"
+                    referrer: null
+                topReferrers:
+                  - referrer: "https://news.ycombinator.com"
+                    count: 78
+                  - referrer: "direct"
+                    count: 50
+        '404':
+          description: Short code not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (20 requests/minute per IP)
+
+components:
+  schemas:
+
+    ShortenUrlRequest:
+      type: object
+      required:
+        - originalUrl
+      properties:
+        originalUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: The long URL to shorten. Must start with http:// or https://.
+          example: "https://example.com/very/long/path?query=param"
+        customAlias:
+          type: string
+          pattern: '^[a-zA-Z0-9-]{3,50}$'
+          description: Optional custom short code (3–50 alphanumeric chars or hyphens).
+          example: "my-promo"
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional expiry timestamp. Defaults to 30 days from creation if omitted.
+          example: "2026-12-31T23:59:59"
+
+    ShortenUrlResponse:
+      type: object
+      properties:
+        shortCode:
+          type: string
+          example: "aB3x"
+        shortUrl:
+          type: string
+          format: uri
+          example: "http://localhost:8080/aB3x"
+        originalUrl:
+          type: string
+          format: uri
+          example: "https://example.com/very/long/path?query=param"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-10-09T16:00:00"
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2026-11-08T16:00:00"
+
+    AnalyticsResponse:
+      type: object
+      properties:
+        shortCode:
+          type: string
+          example: "aB3x"
+        totalClicks:
+          type: integer
+          format: int64
+          example: 128
+        recentClicks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClickSummary'
+        topReferrers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferrerSummary'
+
+    ClickSummary:
+      type: object
+      properties:
+        clickedAt:
+          type: string
+          format: date-time
+          example: "2026-10-09T16:20:15"
+        referrer:
+          type: string
+          nullable: true
+          example: "https://news.ycombinator.com"
+
+    ReferrerSummary:
+      type: object
+      properties:
+        referrer:
+          type: string
+          example: "https://news.ycombinator.com"
+        count:
+          type: integer
+          format: int64
+          example: 78
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-10-09T16:00:00"
+        status:
+          type: integer
+          example: 404
+        error:
+          type: string
+          example: "Not Found"
+        message:
+          type: string
+          example: "Short code 'aB3x' not found"
+        path:
+          type: string
+          example: "/aB3x"

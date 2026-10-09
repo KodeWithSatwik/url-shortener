@@ -1,0 +1,22 @@
+---
+# service.yaml — Kubernetes Service for the URL Shortener
+#
+# ClusterIP: internal cluster access only.
+# To expose externally, add an Ingress (with TLS termination) in front of this.
+# Apply: kubectl apply -f k8s/service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: urlshortener-svc
+  labels:
+    app: urlshortener
+spec:
+  type: ClusterIP
+  selector:
+    app: urlshortener        # matches Deployment pod labels
+  ports:
+    - name: http
+      port: 80               # cluster-internal port clients call
+      targetPort: 8080       # container port Spring Boot listens on
+      protocol: TCP

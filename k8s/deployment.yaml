@@ -1,0 +1,111 @@
+---
+# deployment.yaml — Kubernetes Deployment for the URL Shortener
+#
+# Prerequisites:
+#   kubectl apply -f k8s/configmap.yaml
+#   kubectl apply -f k8s/secret.yaml      # (copied and filled from secret.example.yaml)
+#   kubectl apply -f k8s/service.yaml
+#   kubectl apply -f k8s/deployment.yaml
+#
+# The image below assumes you have built and pushed the Docker image:
+#   docker build -t your-registry/urlshortener:1.0.0 .
+#   docker push your-registry/urlshortener:1.0.0
+# Then update `image:` below with your registry path.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urlshortener
+  labels:
+    app: urlshortener
+spec:
+  replicas: 2                        # 2 replicas for basic availability
+  selector:
+    matchLabels:
+      app: urlshortener
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0              # never take a pod down before a new one is ready
+      maxSurge: 1                    # bring up one extra pod during rollout
+
+  template:
+    metadata:
+      labels:
+        app: urlshortener
+    spec:
+      # Prevent two replicas landing on the same node (soft preference)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: urlshortener
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: urlshortener
+          # Replace with your actual registry image and tag
+          image: your-registry/urlshortener:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+
+          # ── Environment: non-sensitive config from ConfigMap ────────────────
+          envFrom:
+            - configMapRef:
+                name: urlshortener-config
+
+          # ── Environment: secrets from Secret ───────────────────────────────
+          env:
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: urlshortener-secret
+                  key: DATABASE_USER
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urlshortener-secret
+                  key: DATABASE_PASSWORD
+
+          # ── Resource limits: prevent one pod consuming all node memory ──────
+          resources:
+            requests:
+              cpu: "250m"            # 0.25 vCPU guaranteed
+              memory: "256Mi"        # 256 MB guaranteed
+            limits:
+              cpu: "500m"            # cap at 0.5 vCPU
+              memory: "512Mi"        # cap at 512 MB; JVM MaxRAMPercentage=75 = ~384 MB heap
+
+          # ── Liveness probe: restart pod if Spring Boot stops responding ─────
+          # Uses Actuator /actuator/health — already exposed by the app.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 60  # Flyway migrations + JPA startup time
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Readiness probe: don't route traffic until app is ready ─────────
+          # A pod is only added to the Service endpoints when this passes.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Graceful shutdown: give in-flight requests time to complete ──────
+          # Matches server.shutdown=graceful in application.yml
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]  # give load balancer time to drain

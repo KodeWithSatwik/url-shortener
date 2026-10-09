@@ -1,0 +1,74 @@
+# docker-compose.yml — URL Shortener Service (Production-like stack)
+#
+# Brings up two services:
+#   db  — PostgreSQL 16 with a persistent named volume
+#   app — URL Shortener fat JAR running with the 'prod' Spring profile
+#
+# Setup:
+#   cp .env.example .env     # copy the template
+#   # edit .env with real credentials
+#   docker compose up --build
+#
+# Other commands:
+#   docker compose up -d             # detached (background)
+#   docker compose down              # stop and remove containers
+#   docker compose down -v           # also remove the postgres data volume
+
+services:
+
+  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: urlshortener-db
+    restart: unless-stopped
+    env_file:
+      - .env   # reads POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD from .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      # Expose on localhost only so the DB is never reachable from outside the host
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U urlshortener -d urlshortener"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── URL Shortener Application ───────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: urlshortener-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy   # wait for Postgres to be ready before starting
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env   # reads DATABASE_URL, DATABASE_USER, DATABASE_PASSWORD, APP_BASE_URL
+    environment:
+      # Activate the 'prod' Spring profile (uses PostgreSQL, disables H2 console)
+      SPRING_PROFILES_ACTIVE: prod
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_USER: ${DATABASE_USER}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      APP_BASE_URL: ${APP_BASE_URL}
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s   # Flyway migrations + JPA startup need time on first boot
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    name: urlshortener_postgres_data

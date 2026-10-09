@@ -1,0 +1,25 @@
+---
+# configmap.yaml — Non-sensitive application configuration
+#
+# Secrets (DATABASE_PASSWORD, etc.) go in secret.yaml — NOT here.
+# Apply: kubectl apply -f k8s/configmap.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: urlshortener-config
+  labels:
+    app: urlshortener
+data:
+  # Spring profile — activates application-prod.yml (PostgreSQL, secure Actuator)
+  SPRING_PROFILES_ACTIVE: "prod"
+
+  # JDBC URL uses the Kubernetes Service name "urlshortener-db" as the hostname.
+  # If you deploy PostgreSQL separately, update this to your actual service/host.
+  DATABASE_URL: "jdbc:postgresql://urlshortener-db:5432/urlshortener"
+
+  # Public-facing base URL. Replace with your actual domain behind the Ingress/LB.
+  APP_BASE_URL: "https://short.example.com"
+
+  # Cleanup cron — runs nightly at 03:00 UTC
+  APP_CLEANUP_CRON: "0 0 3 * * *"
